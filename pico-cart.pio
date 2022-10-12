@@ -1,0 +1,148 @@
+; Output a constant clock signal to the shift-registers
+; at 1/3 of the PIO clock speed
+;.program cart_sr_clock
+;    set pindirs, 1
+;.wrap_target
+;    set pins, 1 [1] ; 192/2 = 96mhz
+;    set pins, 0 [1]
+;.wrap
+
+; Make SH/LD the inverse of /RD
+;.program cart_sh_ld
+;.side_set 1
+;.wrap_target
+;    wait 1 gpio 11 side 1
+;    wait 0 gpio 11 side 0
+;.wrap
+
+; Handle /RD / CLOCK / ADDRESS
+
+.program cart_address
+.side_set 1
+.wrap_target
+    wait 1 gpio 11 side 1
+    wait 0 gpio 11 side 0
+    set pins, 1 side 0
+    set pins, 0 side 1
+
+    set pins, 1 [2] side 1  ; 4 cycles after this data is available
+    set pins, 0 [1] side 1  ; 1
+    in pins, 4 side 1
+    
+    set pins, 1 [2] side 1 ; 4 cycles after this
+    set pins, 0 [1] side 1 
+    in pins, 4 side 1
+    
+    set pins, 1 [2] side 1
+    set pins, 0 [1] side 1
+    in pins, 4 side 1
+
+    set pins, 1 [2] side 1
+    set pins, 0 [1] side 1
+    in pins, 4 side 1
+
+    set pins, 1 [2] side 1
+    set pins, 0 [1] side 1
+    in pins, 4 side 1
+    
+    set pins, 1 [2] side 1
+    set pins, 0 [1] side 1
+    in pins, 4 side 1
+    
+    ; Push to FIFO
+    push noblock side 1
+.wrap
+
+
+; Handle DIR/DATA
+; 
+; In = /RD + /CE
+; Out = Data
+; Side = DIR
+.program cart_dir_data
+.side_set 1
+    mov osr, null   side 0
+    out pindirs, 8  side 0  ; Set data pins to input
+    set x, 0        side 0  ; Clear X
+    set y, 0        side 0  ; Clear Y
+startloop:
+    ; Wait for /RD + /CE
+    mov osr, null   side 0
+    out pindirs, 8  side 0  ; Set data pins to input
+start:
+    in null, 32     side 0  ; Clear ISR
+    in pins, 2      side 0  ; Read /CE + /RD
+    mov y, isr      side 0  ; Copy to Y
+    jmp !y next     side 0  ; If both /CE and /RD are low, jump to next
+    jmp start       side 0  ; Otherwise loop
+
+next:
+    mov osr, ~null  side 0  
+    out pindirs, 8  side 1  ; Set data pins to output
+    pull block      side 1  ; This is a "mov osr, x" if the FIFO is null
+    out pins, 8     side 1  ; Output OSR to data pins 
+
+
+    ; mov x, osr      side 1  ; Copy OSR back to X in case it was filled from the FIFO so we can repeatadly output it
+loop:
+    in null, 32     side 1  ; Clear ISR
+    in pins, 2      side 1  ; Read /CE + /RD
+    mov y, isr      side 1  ; Copy to Y
+    jmp !y loop     side 1  ; If both /CE and /RD are low, loop and output data
+    jmp startloop   side 0  ; Otherwise jump to start and stop outputting data
+
+
+
+
+
+% c-sdk {
+    static inline void pio_address_init(PIO pio, uint sm, uint offset, uint in_pins, uint clk_pin, uint ld_pin) {
+        pio_gpio_init(pio, clk_pin);
+        pio_gpio_init(pio, ld_pin);
+        pio_sm_set_consecutive_pindirs(pio, sm, in_pins, 4, false);
+        pio_sm_set_consecutive_pindirs(pio, sm, clk_pin, 1, true);
+        pio_sm_set_consecutive_pindirs(pio, sm, ld_pin, 1, true);
+
+        pio_sm_config c = cart_address_program_get_default_config(offset);
+        sm_config_set_in_pins(&c, in_pins);
+        sm_config_set_in_shift(&c, false, false, 0);
+
+        sm_config_set_sideset(&c, 1, false, false);
+        sm_config_set_sideset_pins(&c, ld_pin);
+
+        sm_config_set_set_pins(&c, clk_pin, 1);
+
+        pio_sm_init(pio, sm, offset, &c);
+        pio_sm_set_enabled(pio, sm, true);
+    }
+
+    static inline void pio_data_init(PIO pio, uint sm, uint offset, uint in_pins, uint out_pins, uint dir_pin) {
+        pio_gpio_init(pio, dir_pin);
+        pio_gpio_init(pio, out_pins);
+        pio_gpio_init(pio, out_pins + 1);
+        pio_gpio_init(pio, out_pins + 2);
+        pio_gpio_init(pio, out_pins + 3);
+        pio_gpio_init(pio, out_pins + 4);
+        pio_gpio_init(pio, out_pins + 5);
+        pio_gpio_init(pio, out_pins + 6);
+        pio_gpio_init(pio, out_pins + 7);
+
+        pio_sm_set_consecutive_pindirs(pio, sm, dir_pin, 1, true);
+        pio_sm_set_consecutive_pindirs(pio, sm, out_pins, 8, true);
+
+        pio_sm_config c = cart_dir_data_program_get_default_config(offset);
+        sm_config_set_in_pins(&c, in_pins);
+        sm_config_set_in_shift(&c, false, false, 0);
+
+        sm_config_set_out_pins(&c, out_pins, 8);
+        sm_config_set_out_special(&c, true, false, false);
+
+        sm_config_set_sideset(&c, 1, false, false);
+        sm_config_set_sideset_pins(&c, dir_pin);
+
+        //hw_set_bits(&pio->input_sync_bypass, (1 << in_pins) | (1 << (in_pins + 1)));
+
+        pio_sm_init(pio, sm, offset, &c);
+        pio_sm_set_enabled(pio, sm, true);
+    }
+%}
