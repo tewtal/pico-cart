@@ -62,19 +62,15 @@ start:
 next:
     mov osr, ~null  side 0  
     out pindirs, 8  side 1  ; Set data pins to output
-    pull block      side 1  ; This is a "mov osr, x" if the FIFO is null
-    out pins, 8     side 1  ; Output OSR to data pins 
+    pull block      side 1  ; Wait for data to become available from C code
+    out pins, 8     side 1  ; Output OSR to data pins
 
-
-    ; mov x, osr      side 1  ; Copy OSR back to X in case it was filled from the FIFO so we can repeatadly output it
 loop:
     in null, 32     side 1  ; Clear ISR
     in pins, 2      side 1  ; Read /CE + /RD
     mov y, isr      side 1  ; Copy to Y
     jmp !y loop     side 1  ; If both /CE and /RD are low, loop and output data
     jmp startloop   side 0  ; Otherwise jump to start and stop outputting data
-
-
 
 
 
